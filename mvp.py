@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import base64
+import json
 
 load_dotenv()
 
@@ -87,5 +88,21 @@ Response Example:
 
     return "".join(response_parts)
 
+def transaction(ai_decision):
+    access = os.getenv("UPBIT_ACCESS_KEY")
+    secret = os.getenv("UPBIT_SECRET_KEY")
+    upbit = pyupbit.Upbit(access=access, secret=secret)
+
+    if ai_decision["decision"] == "buy":
+        print(upbit.buy_market_order("KRW-BTC", upbit.get_balance("KRW")))
+        print(ai_decision["reason"])
+    elif ai_decision["decision"] == "sell":
+        print(upbit.sell_market_order("KRW-BTC", upbit.get_balance("KRW-BTC")))
+        print(ai_decision["reason"])
+    elif ai_decision["decision"] == "hold":
+        pass
+
 if __name__ == "__main__":
-    result_json_str = generate()
+    transaction(json.loads(generate()))
+
+
