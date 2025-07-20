@@ -3,17 +3,15 @@ import pyupbit
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-import base64
 import time
 import json
 
 load_dotenv()
 
-# 1. 업비트 차트 데이터 가져오기 (30일)
-
-df = pyupbit.get_ohlcv('KRW-BTC', count = 30, interval="day")
-# 2. AI에게 데이터 제공하고 판단 받기
 def generate():
+    # 1. 업비트 차트 데이터 가져오기 (30일)
+    df = pyupbit.get_ohlcv('KRW-BTC', count = 30, interval="day")
+    # 2. AI에게 데이터 제공하고 판단 받기
     client = genai.Client(
         api_key=os.environ.get("GEMINI_API_KEY"),
     )
