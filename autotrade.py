@@ -13,7 +13,7 @@ import requests
 load_dotenv()
 
 def get_news_headlines(api_key, query="bitcoin OR cryptocurrency", gl="us", hl="en"):
-    """SerpAPI를 통해 최신 뉴스 헤드라인을 가져옵니다."""
+    """SerpAPI를 통해 최신 뉴스 헤드라인(title, date만)을 가져옵니다."""
     params = {
         "engine": "google_news",
         "q": query,
@@ -24,8 +24,22 @@ def get_news_headlines(api_key, query="bitcoin OR cryptocurrency", gl="us", hl="
     try:
         response = requests.get("https://serpapi.com/search.json", params=params)
         response.raise_for_status()
-        # 'news_results' 키가 없을 경우를 대비하여 get 사용, 상위 10개만 반환
-        return response.json().get("news_results", [])[:10]
+
+        # API 응답에서 'news_results' 리스트를 가져옵니다.
+        news_results = response.json().get("news_results", [])
+
+        # 'title'과 'date'만 포함하는 새로운 리스트를 생성합니다.
+        filtered_news = [
+            {
+                "title": item.get("title"),
+                "date": item.get("date")
+            }
+            for item in news_results
+        ]
+
+        # 상위 10개만 반환합니다.
+        return filtered_news[:10]
+
     except requests.exceptions.RequestException as e:
         print(f"### SerpAPI News Fetch Error: {e} ###")
         return None

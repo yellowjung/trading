@@ -3,3 +3,4 @@ openai
 pyupbit
 google-genai
 ta
+selenium
