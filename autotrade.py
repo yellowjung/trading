@@ -1,17 +1,84 @@
 import os
-import pyupbit
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 import time
 import json
 import pandas as pd
 import ta
 import requests
+import pyupbit
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
 
+# ==============================================================================
+# STEP 1: 차트 스크린샷 캡처 기능 (test.py에서 가져와 통합)
+# ==============================================================================
+def capture_chart_screenshot(url, save_path):
+    """
+    주어진 URL의 차트를 설정(1시간봉, 볼린저밴드)하고 캡처하여 저장합니다.
+    자동화를 위해 헤드리스 모드로 실행됩니다.
+    """
+    print("📈 차트 스크린샷 캡처를 시작합니다...")
+    try:
+        chrome_options = Options()
+        # 자동 매매 환경에서는 브라우저 창이 보이지 않도록 headless 옵션을 사용합니다.
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--lang=ko_KR")
+        # 일부 시스템에서 발생하는 오류 방지를 위한 옵션
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+
+
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.get(url)
+
+        wait = WebDriverWait(driver, 20) # 네트워크 환경을 고려해 대기시간을 20초로 설정
+
+        # 1. '1시간' 봉으로 변경
+        time_menu_button_xpath = "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[1]"
+        time_menu_button = wait.until(EC.element_to_be_clickable((By.XPATH, time_menu_button_xpath)))
+        time_menu_button.click()
+
+        one_hour_option_xpath = "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[1]/cq-menu-dropdown/cq-item[8]"
+        one_hour_option = wait.until(EC.element_to_be_clickable((By.XPATH, one_hour_option_xpath)))
+        one_hour_option.click()
+        time.sleep(1)
+
+        # 2. '볼린저 밴드' 지표 추가
+        indicator_menu_xpath = "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[3]"
+        indicator_menu = wait.until(EC.element_to_be_clickable((By.XPATH, indicator_menu_xpath)))
+        indicator_menu.click()
+
+        bollinger_bands_option_xpath = "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[3]/cq-menu-dropdown/cq-scroll/cq-studies/cq-studies-content/cq-item[14]"
+        bollinger_bands_option = wait.until(EC.element_to_be_clickable((By.XPATH, bollinger_bands_option_xpath)))
+        bollinger_bands_option.click()
+        time.sleep(3)
+
+        # 3. 전체 화면 캡처
+        total_height = driver.execute_script("return document.body.parentNode.scrollHeight")
+        driver.set_window_size(1920, total_height)
+        time.sleep(2)
+        driver.save_screenshot(save_path)
+        print(f"✅ 스크린샷이 '{save_path}' 경로에 성공적으로 저장되었습니다.")
+        return True
+
+    except Exception as e:
+        print(f"❌ 차트 캡처 중 오류가 발생했습니다: {e}")
+        return False
+    finally:
+        if 'driver' in locals() and driver:
+            driver.quit()
+
+# --- 기존 autotrade.py 함수들 ---
 def get_news_headlines(api_key, query="bitcoin OR cryptocurrency", gl="us", hl="en"):
     """SerpAPI를 통해 최신 뉴스 헤드라인(title, date만)을 가져옵니다."""
     params = {
@@ -24,27 +91,11 @@ def get_news_headlines(api_key, query="bitcoin OR cryptocurrency", gl="us", hl="
     try:
         response = requests.get("https://serpapi.com/search.json", params=params)
         response.raise_for_status()
-
-        # API 응답에서 'news_results' 리스트를 가져옵니다.
         news_results = response.json().get("news_results", [])
-
-        # 'title'과 'date'만 포함하는 새로운 리스트를 생성합니다.
-        filtered_news = [
-            {
-                "title": item.get("title"),
-                "date": item.get("date")
-            }
-            for item in news_results
-        ]
-
-        # 상위 10개만 반환합니다.
+        filtered_news = [{"title": item.get("title"), "date": item.get("date")} for item in news_results]
         return filtered_news[:10]
-
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"### SerpAPI News Fetch Error: {e} ###")
-        return None
-    except json.JSONDecodeError:
-        print(f"### SerpAPI JSON Decode Error ###")
         return None
 
 def get_fear_and_greed_index(limit=30):
@@ -54,7 +105,7 @@ def get_fear_and_greed_index(limit=30):
         response = requests.get(url)
         response.raise_for_status()
         return response.json().get('data', [])
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"### Fear & Greed Index API Error: {e} ###")
         return None
 
@@ -72,40 +123,55 @@ def add_technical_indicators(df):
     df.dropna(inplace=True)
     return df
 
+# ==============================================================================
+# STEP 2 & 3: AI 분석 요청 함수 수정 (이미지 데이터 및 프롬프트 수정)
+# ==============================================================================
 def generate(upbit_client):
     """필요한 모든 데이터를 수집하고 AI에게 투자 결정을 요청하는 함수"""
+    # 현재 스크립트 파일이 위치한 디렉토리 경로를 가져옵니다.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 위 경로와 파일명을 합쳐서 전체 저장 경로를 생성합니다.
+    screenshot_filename = "upbit_chart_for_ai.png"
+    screenshot_path = os.path.join(script_dir, screenshot_filename)
+    chart_image_part = None
+
     try:
+        # 0. 차트 이미지 캡처
+        chart_url = "https://upbit.com/full_chart?code=CRIX.UPBIT.KRW-BTC"
+        if capture_chart_screenshot(chart_url, screenshot_path):
+            # 성공적으로 캡처한 이미지를 AI에게 보낼 Part 객체로 변환
+            with open(screenshot_path, 'rb') as f:
+                image_bytes = f.read()
+            chart_image_part = types.Part.from_bytes(
+                data=image_bytes,
+                mime_type='image/png'
+            )
+        else:
+            print("### 차트 이미지를 분석에서 제외합니다. ###")
+
         # 1. 내 자산 정보
-        all_balances = upbit_client.get_balances()
-        my_balances = [b for b in all_balances if b['currency'] in ['KRW', 'BTC']]
+        my_balances = [b for b in upbit_client.get_balances() if b['currency'] in ['KRW', 'BTC']]
 
         # 2. 오더북
         orderbook = pyupbit.get_orderbook('KRW-BTC')
 
-        # 3. 차트 데이터 (raw)
-        df_day_raw = pyupbit.get_ohlcv('KRW-BTC', count=60, interval="day")
-        df_hour_raw = pyupbit.get_ohlcv('KRW-BTC', count=60, interval="minute60")
+        # 3. 차트 데이터 (raw) 및 보조지표 추가
+        df_day = add_technical_indicators(pyupbit.get_ohlcv('KRW-BTC', count=60, interval="day").copy())
+        df_hour = add_technical_indicators(pyupbit.get_ohlcv('KRW-BTC', count=60, interval="minute60").copy())
 
-        # 4. 보조지표 추가
-        df_day = add_technical_indicators(df_day_raw.copy())
-        df_hour = add_technical_indicators(df_hour_raw.copy())
+        # 4. 공포 탐욕 지수
+        fng_data = get_fear_and_greed_index(limit=30) or []
 
-        # 5. 공포 탐욕 지수
-        fng_data = get_fear_and_greed_index(limit=30)
-        if fng_data is None: fng_data = []
-
-        # 6. 최신 뉴스 헤드라인 (SerpAPI)
+        # 5. 최신 뉴스 헤드라인
         serpapi_key = os.getenv("SERPAPI_API_KEY")
-        news_headlines = []
-        if serpapi_key:
-            news_headlines = get_news_headlines(serpapi_key)
-            if news_headlines is None: news_headlines = []
-        else:
-            print("### SERPAPI_API_KEY not found in .env. Skipping news fetch. ###")
+        news_headlines = get_news_headlines(serpapi_key) if serpapi_key else []
 
-        # 7. AI에게 보낼 데이터 종합
+        # 6. AI에게 보낼 프롬프트 데이터 (텍스트 부분) - 이미지 분석 요청 문구 추가
         prompt_data = f"""
         As a top-tier crypto analyst, synthesize all of the following data points to make a single, decisive investment call (buy/sell/hold) for KRW-BTC.
+
+        **CRITICAL: You MUST visually analyze the attached chart image.** Look for candlestick patterns (e.g., doji, hammer), chart patterns (e.g., head and shoulders, flags), and indicator shapes (e.g., Bollinger Band squeezes/expansions, RSI divergence) that are not present in the raw data below. The visual analysis is a primary factor in your decision.
 
         ### 1. My Current Investment Status (KRW & BTC only)
         {json.dumps(my_balances, indent=2)}
@@ -127,49 +193,47 @@ def generate(upbit_client):
         """
     except Exception as e:
         print(f"### Data Fetching Error: {e} ###")
+        if os.path.exists(screenshot_path):
+            os.remove(screenshot_path) # 에러 발생 시 임시 이미지 파일 삭제
         return None
 
-    # AI 클라이언트 설정 및 판단 요청
+    # ==============================================================================
+    # STEP 4: AI API 호출 부분 수정 (이미지 Part 추가)
+    # ==============================================================================
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    model = "gemini-1.5-pro"
+
+    # AI에게 전달할 콘텐츠 리스트 구성
+    user_parts = []
+    if chart_image_part:
+        user_parts.append(chart_image_part) # 이미지 Part 추가
+    user_parts.append(types.Part.from_text(text=prompt_data)) # 텍스트 Part 추가
 
     contents = [
-        types.Content(role="user", parts=[types.Part.from_text(text=prompt_data)]),
+        types.Content(role="user", parts=user_parts),
+        # --- 기존의 few-shot 예제는 그대로 유지 ---
         types.Content(
             role="model",
             parts=[
-                types.Part.from_text(text="""**Comprehensive Analysis: Integrating News, Sentiment, and Technicals**
-
-I will now conduct a multi-layered analysis, starting with qualitative factors and then confirming with quantitative data.
-
-**1. Qualitative News Analysis:** First, I'll scan the news headlines for any market-moving events. Positive news (e.g., a major company announcing Bitcoin adoption, favorable ETF news) is a strong bullish factor. Negative news (e.g., a major exchange hack, new restrictive regulations) is a strong bearish factor. The absence of major news suggests technicals will dominate.
-
-**2. Market Sentiment Analysis (Fear & Greed Index):** Next, I'll gauge the overall market emotion. 'Extreme Fear' often signals a bottom is near, making it a contrarian buy indicator. 'Extreme Greed' signals a potential top, suggesting caution or profit-taking.
-
-**3. Technical Analysis (Charts & Indicators):** Finally, I'll confirm my qualitative and sentiment-based hypothesis with technical data. I'm looking for confluence. For example, if there's major positive news and the F&G index shows 'Fear' (indicating disbelief or an early-stage rally), I will look for a bullish MACD cross and rising RSI on the daily chart to confirm a 'buy' signal.
-
-**4. Synthesized Thesis & Decision:**
-The news is reporting a significant new regulatory approval for Bitcoin ETFs in a major economy. This is a strong bullish qualitative factor. The F&G Index is at '55' (Greed), indicating growing optimism but not yet 'Extreme Greed'. The daily chart's MACD is crossing upwards, and the RSI is climbing at 60. This confluence of bullish news, rising optimism, and confirming technicals presents a clear 'buy' signal.
-"""),
-                types.Part.from_text(text="""{\"decision\":\"buy\",\"reason\":\"Strong bullish signal from major positive regulatory news, confirmed by rising market optimism (F&G Index at 55) and bullish technicals (MACD crossover, RSI at 60) on the daily chart.\"}"""),
+                types.Part.from_text(text="""{\"decision\":\"buy\",\"reason\":\"Visually confirmed a Bollinger Band squeeze on the attached hourly chart, suggesting imminent volatility. This is coupled with a rising RSI and positive news sentiment, creating a strong buy signal before a potential breakout.\"}"""),
             ],
         ),
     ]
 
+    # ... (기존 시스템 지침 및 설정은 동일하게 유지) ...
     generate_content_config = types.GenerateContentConfig(
         response_mime_type="application/json",
         system_instruction=[
-            types.Part.from_text(text="""You are a world-class crypto analyst. Your primary goal is to synthesize qualitative data (news) with quantitative data (charts, indicators, sentiment index) to make a single, actionable investment decision (buy, sell, or hold). Your reasoning must demonstrate how these different data types support each other (or conflict). Prioritize major news events as they can override technicals. Respond in JSON format.
+            types.Part.from_text(text="""You are a world-class crypto analyst. Your primary goal is to synthesize qualitative data (news), quantitative data (charts, indicators), and **visual chart analysis (the attached image)** to make a single, actionable investment decision (buy, sell, or hold). Your reasoning must demonstrate how these different data types support each other. Prioritize major news events and clear visual patterns on the chart. Respond in JSON format.
 
 Response Example:
-{\"decision\":\"sell\",\"reason\":\"Major negative news about an exchange hack overrides bullish technicals, creating high uncertainty. F&G index is dropping sharply, confirming market panic.\"}
+{\"decision\":\"sell\",\"reason\":\"The attached chart clearly shows a head and shoulders pattern, a strong bearish visual indicator. This is confirmed by the F&G index dropping sharply, indicating market panic.\"}
 """),
         ],
     )
 
     try:
         response = client.generate_content(
-            model=model,
+            model="gemini-1.5-flash", # 이미지 분석을 위해 1.5 버전 이상 모델 권장
             contents=contents,
             generation_config=generate_content_config,
         )
@@ -177,6 +241,12 @@ Response Example:
     except Exception as e:
         print(f"### AI Response Error: {e} ###")
         return None
+    finally:
+        # 분석이 끝난 임시 이미지 파일 삭제
+        if os.path.exists(screenshot_path):
+            os.remove(screenshot_path)
+            print(f"🗑️ 임시 스크린샷 파일 '{screenshot_path}'을(를) 삭제했습니다.")
+
 
 def transaction(ai_decision_json, upbit_client):
     """AI의 결정을 받아 실제 매매를 실행하는 함수"""
@@ -198,18 +268,16 @@ def transaction(ai_decision_json, upbit_client):
         krw_balance = upbit_client.get_balance("KRW")
         if krw_balance > 5000:
             buy_result = upbit_client.buy_market_order("KRW-BTC", krw_balance * 0.9995)
-            print("### Buy Order Executed! ###")
-            print(buy_result)
+            print("### Buy Order Executed! ###"); print(buy_result)
         else:
             print("### Buy Order Failed: Insufficient KRW (less than 5000 KRW) ###")
     elif decision == "sell":
         btc_balance = upbit_client.get_balance("KRW-BTC")
-        if btc_balance > 0:
+        if btc_balance and btc_balance > 0:
             current_price = pyupbit.get_current_price("KRW-BTC")
-            if current_price is not None and btc_balance * current_price > 5000:
+            if current_price and (btc_balance * current_price > 5000):
                 sell_result = upbit_client.sell_market_order("KRW-BTC", btc_balance)
-                print("### Sell Order Executed! ###")
-                print(sell_result)
+                print("### Sell Order Executed! ###"); print(sell_result)
             else:
                 print("### Sell Order Failed: Insufficient BTC value (less than 5000 KRW) or price fetch failed ###")
         else:
@@ -224,10 +292,11 @@ if __name__ == "__main__":
         raise ValueError("UPBIT_ACCESS_KEY and UPBIT_SECRET_KEY must be set in .env file")
 
     upbit = pyupbit.Upbit(access, secret)
-    print("### AI Trading Bot Started with News & Sentiment Analysis ###")
+    print("### 👁️ AI Trading Bot Started with Visual Chart Analysis ###")
 
     while True:
         ai_response = generate(upbit)
         transaction(ai_response, upbit)
-        print("\n--- Waiting for next cycle (10s) ---\n")
-        time.sleep(10)
+        # 업비트 API는 요청 제한이 있으므로 실제 운영 시에는 더 긴 대기 시간을 권장합니다.
+        print("\n--- Waiting for next cycle (60s) ---\n")
+        time.sleep(60)

@@ -4,3 +4,4 @@ pyupbit
 google-genai
 ta
 selenium
+youtube-transcript-api
