@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import base64
+import time
 import json
 
 load_dotenv()
@@ -89,20 +90,33 @@ Response Example:
     return "".join(response_parts)
 
 def transaction(ai_decision):
+    print("### AI Decision: ", ai_decision["decision"].upper(), "###")
+    print(f"### Reason: {ai_decision['reason']} ###")
     access = os.getenv("UPBIT_ACCESS_KEY")
     secret = os.getenv("UPBIT_SECRET_KEY")
     upbit = pyupbit.Upbit(access=access, secret=secret)
 
     if ai_decision["decision"] == "buy":
-        print(upbit.buy_market_order("KRW-BTC", upbit.get_balance("KRW")))
-        print(ai_decision["reason"])
+        my_krw = upbit.get_balance("KRW")
+        if my_krw * 0.9995 > 5000:
+            print("### Buy Order Executed! ###")
+            print(upbit.buy_market_order("KRW-BTC", upbit.get_balance(my_krw * 0.9995)))
+        else:
+            print("### Buy Order Failed: Insufficient KRW (less than 5000 KRW) ###")
     elif ai_decision["decision"] == "sell":
-        print(upbit.sell_market_order("KRW-BTC", upbit.get_balance("KRW-BTC")))
-        print(ai_decision["reason"])
+        my_btc = upbit.get_balance("KRW-BTC")
+        current_price = pyupbit.get_orderbook(ticker="KRW-BTC")["orderbook_units"][0]["ask_price"]
+        if my_btc * current_price > 5000:
+            print("### Sell Order Executed! ###")
+            print(upbit.sell_market_order("KRW-BTC", upbit.get_balance("KRW-BTC")))
+        else:
+            print("### Sell Order Failed: Insufficient BTC (less than 5000 BTC) ###")
     elif ai_decision["decision"] == "hold":
-        pass
+        print("### Hold Position ###")
 
 if __name__ == "__main__":
-    transaction(json.loads(generate()))
+    while True:
+        time.sleep(10)
+        transaction(json.loads(generate()))
 
 
